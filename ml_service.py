@@ -377,34 +377,48 @@ def predict(req: PredictRequest):
         service = req.service_type or ""
 
         rows = []
+
         for s in req.servicemen:
             dist = haversine_km(user_lat, user_lng, s.location_lat, s.location_lng)
+
             rows.append({
                 "distance_km": dist,
-                "base_cost": float(s.base_cost or 0),
-                "rating": float(s.rating or 0),
-                "technician_charges": float(s.base_cost or 0),
-                "technician_rating": float(s.rating or 0),
+                "base_cost": float(s.base_cost or 0.0),
+                "rating": float(s.rating or 0.0),
+                "technician_charges": float(s.base_cost or 0.0),
+                "technician_rating": float(s.rating or 0.0),
                 "service_type": service,
                 "vehicle_type": "mechanic",
                 "id": s.id,
-                "full_name": s.full_name or ""
+                "full_name": s.full_name or "",
+
+                # ⭐ ADDED FOR MAP (does NOT affect model)
+                "location_lat": float(s.location_lat),
+                "location_lng": float(s.location_lng)
             })
 
         df = pd.DataFrame(rows)
 
+        # ML model prediction (unchanged)
         preds = eta_model.predict(df)
         df["eta_predicted"] = preds
         df = df.sort_values("eta_predicted")
 
-        results = [{
-            "id": r["id"],
-            "full_name": r["full_name"],
-            "distance_km": float(r["distance_km"]),
-            "base_cost": float(r["base_cost"]),
-            "rating": float(r["rating"]),
-            "eta_predicted": float(r["eta_predicted"])
-        } for _, r in df.iterrows()]
+        results = []
+
+        for _, r in df.iterrows():
+            results.append({
+                "id": r["id"],
+                "full_name": r["full_name"],
+                "distance_km": float(r["distance_km"]),
+                "base_cost": float(r["base_cost"]),
+                "rating": float(r["rating"]),
+                "eta_predicted": float(r["eta_predicted"]),
+
+                # ⭐ Return coordinates to frontend
+                "location_lat": float(r["location_lat"]),
+                "location_lng": float(r["location_lng"])
+            })
 
         return {"results": results}
 
