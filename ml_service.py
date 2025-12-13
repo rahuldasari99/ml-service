@@ -1,6 +1,3 @@
-
-
-#     uvicorn.run(app, host="0.0.0.0", port=port)
 from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import List, Optional
@@ -11,17 +8,7 @@ import math
 import traceback
 
 # =====================================================
-#  FIX 1: Dummy class so joblib can load your model
-# =====================================================
-class FinalPriceModel:
-    def __init__(self, param1=None):
-        self.param1 = param1
-
-    def predict(self, df):
-        # training logic
-        return [...]
-# =====================================================
-#  Load ETA Model
+#  Load ETA MODEL ONLY
 # =====================================================
 ETA_MODEL_PATH = "best_eta_model.joblib"
 
@@ -31,22 +18,15 @@ def safe_load(path):
         print(f"[ML] Loaded model: {path}")
         return model
     except Exception as e:
-        print(f"[ML] Failed to load {path}: {e}")
+        print(f"[ML] Failed to load ETA Model: {e}")
         return None
 
 eta_model = safe_load(ETA_MODEL_PATH)
 
 # =====================================================
-#  Load FINAL PRICE MODEL safely
+#  No Final Price Model (Removed)
 # =====================================================
-FINAL_MODEL_PATH = "final_price_model.joblib"
-
-try:
-    final_price_model = joblib.load(FINAL_MODEL_PATH)
-    print("[ML] Loaded final_price_model.joblib successfully")
-except Exception as e:
-    print("[ML] ERROR loading final_price_model.joblib:", e)
-    final_price_model = None
+final_price_model = None  # Always fallback surge logic
 
 
 # =====================================================
@@ -62,6 +42,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # =====================================================
 #   SCHEMAS
@@ -91,11 +72,12 @@ class PriceRequest(BaseModel):
 
 
 # =====================================================
-#  Utility
+#  Utility Function
 # =====================================================
 def haversine_km(lat1, lon1, lat2, lon2):
     if lat2 is None or lon2 is None:
         return 9999.0
+
     R = 6371.0
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
@@ -106,7 +88,7 @@ def haversine_km(lat1, lon1, lat2, lon2):
 
 
 # =====================================================
-#  ETA Prediction Endpoint /predict
+#  ETA Prediction Endpoint /predict  (UNCHANGED)
 # =====================================================
 @app.post("/predict")
 def predict(req: PredictRequest):
@@ -130,21 +112,16 @@ def predict(req: PredictRequest):
                 "vehicle_type": "mechanic",
                 "id": s.id,
                 "full_name": s.full_name or "",
-
-                # ⭐ ADDED FOR MAP (does NOT affect model)
                 "location_lat": float(s.location_lat),
                 "location_lng": float(s.location_lng)
             })
 
         df = pd.DataFrame(rows)
-
-        # ML model prediction (unchanged)
         preds = eta_model.predict(df)
         df["eta_predicted"] = preds
         df = df.sort_values("eta_predicted")
 
         results = []
-
         for _, r in df.iterrows():
             results.append({
                 "id": r["id"],
@@ -153,8 +130,6 @@ def predict(req: PredictRequest):
                 "base_cost": float(r["base_cost"]),
                 "rating": float(r["rating"]),
                 "eta_predicted": float(r["eta_predicted"]),
-
-                # ⭐ Return coordinates to frontend
                 "location_lat": float(r["location_lat"]),
                 "location_lng": float(r["location_lng"])
             })
@@ -167,16 +142,18 @@ def predict(req: PredictRequest):
 
 
 # =====================================================
-#  FINAL PRICE Endpoint  (only ONE version)
+#  FINAL PRICE Endpoint (ONLY FALLBACK SURGE LOGIC)
 # =====================================================
 @app.post("/predict_price")
 def calculate_price(req: PriceRequest):
     try:
+        # 1. Distance
         dist = haversine_km(req.User_Lat, req.User_Lng, req.Tech_Lat, req.Tech_Lng)
 
-        # ETA estimation
+        # 2. ETA estimation
         eta_minutes = round((dist / 30) * 60, 2)
 
+        # 3. Prepare input (kept same for compatibility)
         df = pd.DataFrame([{
             "Service_Name": req.Service_Name,
             "User_Lat": req.User_Lat,
@@ -187,18 +164,17 @@ def calculate_price(req: PriceRequest):
             "Final_ETA_Minutes": eta_minutes
         }])
 
-        if final_price_model:
-            handling_surge = float(final_price_model.predict(df)[0])
-        else:
-            handling_surge = round(eta_minutes * 0.5, 2)
+        # 4. FALLBACK surge logic ONLY (No ML)
+        handling_surge = round(eta_minutes * 0.5, 2)
 
+        # 5. Final Price
         final_price = req.Base_Charge + handling_surge + float(req.Spare_Part_Price or 0)
 
         return {
             "status": "success",
             "Distance_KM": round(dist, 2),
             "ETA_Minutes": eta_minutes,
-            "Handling_Surge": round(handling_surge, 2),
+            "Handling_Surge": handling_surge,
             "Base_Charge": req.Base_Charge,
             "Spare_Part_Price": req.Spare_Part_Price,
             "Final_Price": round(final_price, 2)
@@ -210,7 +186,7 @@ def calculate_price(req: PriceRequest):
 
 
 # =====================================================
-# Root homepage (prevents Render preview page)
+# Root homepage
 # =====================================================
 @app.get("/")
 def home():
@@ -218,7 +194,7 @@ def home():
 
 
 # =====================================================
-# Run server
+# Run Server
 # =====================================================
 if __name__ == "__main__":
     import uvicorn, os
